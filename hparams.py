@@ -19,7 +19,8 @@ def create_hparams(hparams_string=None, verbose=False):
         dist_url="tcp://localhost:54321",
         cudnn_enabled=True,
         cudnn_benchmark=False,
-        ignore_layers=['speaker_embedding.weight'],
+        # ignore_layers=['speaker_embedding.weight'],
+        ignore_layers=['embedding.weight'],
 
         ################################
         # Data Parameters             #
@@ -41,8 +42,8 @@ def create_hparams(hparams_string=None, verbose=False):
         n_mel_channels=80,
         mel_fmin=0.0,
         mel_fmax=8000.0,
-        f0_min=80,
-        f0_max=880,
+        f0_min=80,      # deprecated
+        f0_max=880,     # deprecated
         harm_thresh=0.25,
 
         ################################
@@ -60,16 +61,16 @@ def create_hparams(hparams_string=None, verbose=False):
         n_frames_per_step=1,  # currently only 1 is supported
         decoder_rnn_dim=1024,
         prenet_dim=256,
-        prenet_f0_n_layers=1,
-        prenet_f0_dim=1,
-        prenet_f0_kernel_size=1,
-        prenet_rms_dim=0,
-        prenet_rms_kernel_size=1,
+        prenet_f0_n_layers=1,      # deprecated
+        prenet_f0_dim=1,           # deprecated
+        prenet_f0_kernel_size=1,   # deprecated
+        prenet_rms_dim=0,          # deprecated
+        prenet_rms_kernel_size=1,  # deprecated
         max_decoder_steps=1000,
         gate_threshold=0.5,
         p_attention_dropout=0.1,
         p_decoder_dropout=0.1,
-        p_teacher_forcing=1.0,
+        p_teacher_forcing=1.0,     # deprecated
 
         # Attention parameters
         attention_rnn_dim=1024,
@@ -84,9 +85,9 @@ def create_hparams(hparams_string=None, verbose=False):
         postnet_kernel_size=5,
         postnet_n_convolutions=5,
 
-        # Speaker embedding
-        n_speakers=123,
-        speaker_embedding_dim=128,
+        # Speaker embedding          # deprecated
+        n_speakers=123,              # deprecated
+        speaker_embedding_dim=128,   # deprecated
 
         # Reference encoder
         with_gst=True,
