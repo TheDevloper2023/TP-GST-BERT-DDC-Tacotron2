@@ -57,6 +57,12 @@ def create_hparams(hparams_string=None, verbose=False):
         encoder_n_convolutions=3,
         encoder_embedding_dim=512,
 
+        # TP-CW parameters
+        tpcw_gru_hidden_state_dim=128,
+        tpse_gru_hidden_state_dim=128,
+        tpse_fc_layer_dim=128,
+        tpse_fc_layers=1,
+
         # Decoder parameters
         n_frames_per_step=1,  # currently only 1 is supported
         decoder_rnn_dim=1024,
