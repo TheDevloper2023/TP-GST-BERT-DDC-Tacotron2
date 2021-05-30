@@ -19,7 +19,6 @@ def create_hparams(hparams_string=None, verbose=False):
         dist_url="tcp://localhost:54321",
         cudnn_enabled=True,
         cudnn_benchmark=False,
-        # ignore_layers=['speaker_embedding.weight'],
         ignore_layers=['embedding.weight'],
 
         ################################
@@ -57,12 +56,6 @@ def create_hparams(hparams_string=None, verbose=False):
         encoder_n_convolutions=3,
         encoder_embedding_dim=512,
 
-        # TP-CW parameters
-        tpcw_gru_hidden_state_dim=128,
-        tpse_gru_hidden_state_dim=128,
-        tpse_fc_layer_dim=128,
-        tpse_fc_layers=1,
-
         # Decoder parameters
         n_frames_per_step=1,  # currently only 1 is supported
         decoder_rnn_dim=1024,
@@ -96,7 +89,7 @@ def create_hparams(hparams_string=None, verbose=False):
         speaker_embedding_dim=128,   # deprecated
 
         # Reference encoder
-        with_gst=True,
+        # with_gst=True,
         ref_enc_filters=[32, 32, 64, 64, 128, 128],
         ref_enc_size=[3, 3],
         ref_enc_strides=[2, 2],
@@ -107,6 +100,25 @@ def create_hparams(hparams_string=None, verbose=False):
         token_embedding_size=256,
         token_num=10,
         num_heads=8,
+
+        # TP-GST parameters
+        tpcw_gru_hidden_state_dim=128,
+        tpse_gru_hidden_state_dim=128,
+        tpse_fc_layer_dim=128,
+        tpse_fc_layers=3,
+        tpse_linear_fc_layer_dim=256,
+        tpse_linear_fc_layers=3,
+        tp_gst_use_bert=True,
+
+        # BERT parameters
+        bert_encoder_dim=768,
+        bert_checkpoint_path='bert/rubert_cased_L-12_H-768_A-12_pt/',
+        bert_config_path='bert/config.json',
+        bert_vocab_path='bert/vocab.txt',
+        bert_cased=True,
+        bert_pretrained=True,
+        bert_save_in_checkpoint=False,
+        bert_train=False,
 
         ################################
         # Optimization Hyperparameters #

@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 
 from model import load_model
 from data_utils import TextMelLoader, TextMelCollate
-from loss_function import Tacotron2Loss
+from loss_function import Tacotron2Loss, TPCWLoss, TPSELoss
 from logger import Tacotron2Logger
 from hparams import create_hparams
 
@@ -168,6 +168,8 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
         model = apply_gradient_allreduce(model)
 
     criterion = Tacotron2Loss()
+    criterion_tpse = TPSELoss()
+    criterion_tpcw = TPCWLoss()
 
     logger = prepare_directories_and_logger(
         output_directory, log_directory, rank)
@@ -208,7 +210,17 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
             x, y = model.parse_batch(batch)
             y_pred = model(x)
 
+            # TP-GST
+            tp_gst_output = y_pred.pop()
+            tpcw_output, tpse_output, tpse_linear_output, embedded_gst, scores_gst = tp_gst_output
+
+            loss_tpcw = criterion_tpcw(tpcw_output, scores_gst)
+            loss_tpse = criterion_tpse(tpse_output, embedded_gst)
+            loss_tpse_l = criterion_tpse(tpse_linear_output, embedded_gst)
+
             loss = criterion(y_pred, y)
+            loss = loss + loss_tpcw + loss_tpse + loss_tpse_l
+
             if hparams.distributed_run:
                 reduced_loss = reduce_tensor(loss.data, n_gpus).item()
             else:

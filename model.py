@@ -8,6 +8,9 @@ from torch.nn import functional as F
 from layers import ConvNorm, LinearNorm
 from utils import to_gpu, get_mask_from_lengths
 from modules import GST
+from transformers import BertModel, BertConfig, BertTokenizer
+from transformers import AutoTokenizer, AutoModel
+from tp_gst import TPCW, TPSE, TPSELinear
 
 drop_rate = 0.5
 
@@ -163,6 +166,7 @@ class Encoder(nn.Module):
     """Encoder module:
         - Three 1-d convolution banks
         - Bidirectional LSTM
+    :return: padded hidden states, h_n (forward and backward)
     """
     def __init__(self, hparams):
         super(Encoder, self).__init__()
@@ -203,12 +207,12 @@ class Encoder(nn.Module):
             x, input_lengths, batch_first=True)
 
         self.lstm.flatten_parameters()
-        outputs, _ = self.lstm(x)
+        outputs, (h_n, c_n) = self.lstm(x)
 
         outputs, _ = nn.utils.rnn.pad_packed_sequence(
             outputs, batch_first=True)
 
-        return outputs
+        return outputs, h_n
 
     def inference(self, x):
         for conv in self.convolutions:
@@ -217,9 +221,9 @@ class Encoder(nn.Module):
         x = x.transpose(1, 2)
 
         self.lstm.flatten_parameters()
-        outputs, _ = self.lstm(x)
+        outputs, (h_n, c_n) = self.lstm(x)
 
-        return outputs
+        return outputs, h_n
 
 
 class Decoder(nn.Module):
@@ -524,26 +528,40 @@ class Tacotron2(nn.Module):
         self.fp16_run = hparams.fp16_run
         self.n_mel_channels = hparams.n_mel_channels
         self.n_frames_per_step = hparams.n_frames_per_step
-        self.embedding = nn.Embedding(
-            hparams.n_symbols, hparams.symbols_embedding_dim)
+        self.encoder_embedding_dim = hparams.encoder_embedding_dim
+        self.embedding = nn.Embedding(hparams.n_symbols, hparams.symbols_embedding_dim)
         std = sqrt(2.0 / (hparams.n_symbols + hparams.symbols_embedding_dim))
         val = sqrt(3.0) * std  # uniform bounds for std
         self.embedding.weight.data.uniform_(-val, val)
         self.encoder = Encoder(hparams)
         self.decoder = Decoder(hparams)
         self.postnet = Postnet(hparams)
-        if hparams.with_gst:
-            self.gst = GST(hparams)
+        # tp-gst
+        self.gst = GST(hparams)
+        self.tpcw = TPCW(hparams)
+        self.tpse = TPSE(hparams)
+        self.tpse_linear = TPSELinear(hparams)
+        # bert
+        if hparams.tp_gst_use_bert:
+            self.bert_train = hparams.bert_train
+            self.bert_encoder_dim = hparams.bert_encoder_dim
+            if hparams.bert_pretrained:
+                self.bert_tokenizer = BertTokenizer.from_pretrained(hparams.bert_checkpoint_path, local_files_only=True)
+                self.bert = BertModel.from_pretrained(hparams.bert_checkpoint_path, local_files_only=True)
+            else:
+                config = BertConfig(hparams.bert_config_path)
+                self.bert = BertModel(config)
+                self.bert_tokenizer = BertTokenizer(hparams.bert_vocab_path, do_lower_case=(not hparams.bert_cased))
 
     def parse_batch(self, batch):
-        text_padded, input_lengths, mel_padded, gate_padded, output_lengths = batch
+        text_padded, input_lengths, mel_padded, gate_padded, output_lengths, raw_text = batch
         text_padded = to_gpu(text_padded).long()
         input_lengths = to_gpu(input_lengths).long()
         max_len = torch.max(input_lengths.data).item()
         mel_padded = to_gpu(mel_padded).float()
         gate_padded = to_gpu(gate_padded).float()
         output_lengths = to_gpu(output_lengths).long()
-        return ((text_padded, input_lengths, mel_padded, max_len, output_lengths),
+        return ((text_padded, input_lengths, mel_padded, max_len, output_lengths, raw_text),
                 (mel_padded, gate_padded))
 
     def parse_output(self, outputs, output_lengths=None):
@@ -559,17 +577,47 @@ class Tacotron2(nn.Module):
         return outputs
 
     def forward(self, inputs):
-        inputs, input_lengths, targets, max_len, output_lengths = inputs
+        inputs, input_lengths, targets, max_len, output_lengths, raw_text = inputs
         input_lengths, output_lengths = input_lengths.data, output_lengths.data
 
         # Encoder
         embedded_inputs = self.embedding(inputs).transpose(1, 2)
-        embedded_text = self.encoder(embedded_inputs, input_lengths)
+        embedded_text, hidden_states = self.encoder(embedded_inputs, input_lengths)
 
+        hidden_states = hidden_states.detach()  # stop gradient flow
+        hidden_states = hidden_states.transpose(0, 1)  # batch first
+        hidden_states = hidden_states.reshape(-1, self.encoder_embedding_dim)  # cat forward and backward hidden states
 
-        embedded_gst = self.gst(targets, output_lengths)
+        # Bert
+        if hasattr(self, 'bert'):
+            bert_tokens = self.bert_tokenizer(raw_text, return_tensors="pt", padding=True)
+            bert_output = self.bert(**bert_tokens)
+            if self.bert_train:
+                bert_output = bert_output.pooler_output
+            else:
+                bert_output = bert_output.pooler_output.detach()  # stop gradient flow
+            bert_output_matrix = bert_output.unsqueeze(1).expand(-1, max_len, -1)
+
+        # TP-GST
+        embedded_text_detached = embedded_text.detach()  # stop gradient flow
+        if hasattr(self, 'bert'):
+            tp_gst_input = torch.cat((embedded_text_detached, bert_output_matrix), dim=2)
+            tp_gst_linear_input = torch.cat((hidden_states, bert_output), dim=1)
+        else:
+            tp_gst_input = embedded_text_detached
+            tp_gst_linear_input = hidden_states
+
+        tpcw_output = self.tpcw(tp_gst_input)
+        tpse_output = self.tpse(tp_gst_input)
+        tpse_linear_output = self.tpse_linear(tp_gst_linear_input)
+
+        # GST
+        embedded_gst, scores_gst = self.gst(targets, output_lengths)
+        tp_gst_output = [tpcw_output, tpse_output, tpse_linear_output,
+                         embedded_gst.detach().unsqeeze(1), scores_gst.detach()]    # stop backpropagation to GST
+
+        # New Encoder outputs
         embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
-
         encoder_outputs = torch.cat((embedded_text, embedded_gst), dim=2)
 
         # Decoder
@@ -580,26 +628,73 @@ class Tacotron2(nn.Module):
         mel_outputs_postnet = mel_outputs + mel_outputs_postnet
 
         return self.parse_output(
-            [mel_outputs, mel_outputs_postnet, gate_outputs, alignments],
+            [mel_outputs, mel_outputs_postnet, gate_outputs, alignments, tp_gst_output],
             output_lengths)
 
-    def inference(self, inputs):
+    def inference_reference(self, inputs):
         text, style_input = inputs
         embedded_inputs = self.embedding(text).transpose(1, 2)
-        embedded_text = self.encoder.inference(embedded_inputs)
+        embedded_text, _ = self.encoder.inference(embedded_inputs)
 
-        if hasattr(self, 'gst'):
-            if isinstance(style_input, int):
-                query = torch.zeros(1, 1, self.gst.encoder.ref_enc_gru_size).cuda()
-                GST = torch.tanh(self.gst.stl.embed)
-                key = GST[style_input].unsqueeze(0).expand(1, -1, -1)
-                embedded_gst = self.gst.stl.attention(query, key)
+        if isinstance(style_input, int):
+            query = torch.zeros(1, 1, self.gst.encoder.ref_enc_gru_size).cuda()
+            GST = torch.tanh(self.gst.stl.embed)
+            key = GST[style_input].unsqueeze(0).expand(1, -1, -1)
+            embedded_gst, _ = self.gst.stl.attention(query, key)
+        else:
+            embedded_gst, _ = self.gst(style_input)
+
+        embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
+        encoder_outputs = torch.cat((embedded_text, embedded_gst), dim=2)
+
+        mel_outputs, gate_outputs, alignments = self.decoder.inference(encoder_outputs)
+
+        mel_outputs_postnet = self.postnet(mel_outputs)
+        mel_outputs_postnet = mel_outputs + mel_outputs_postnet
+
+        return self.parse_output(
+            [mel_outputs, mel_outputs_postnet, gate_outputs, alignments])
+
+    def inference(self, inputs, tpgst_model='tpse'):
+        text, raw_text = inputs
+        embedded_inputs = self.embedding(text).transpose(1, 2)
+        embedded_text, hidden_states = self.encoder.inference(embedded_inputs)
+
+        hidden_states = hidden_states.detach()  # stop gradient flow
+        hidden_states = hidden_states.transpose(0, 1)  # batch first
+        hidden_states = hidden_states.reshape(-1, self.encoder_embedding_dim)  # cat forward and backward hidden states
+
+        # Bert
+        if hasattr(self, 'bert'):
+            bert_tokens = self.bert_tokenizer(raw_text, return_tensors="pt", padding=True)
+            bert_output = self.bert(**bert_tokens)
+            if self.bert_train:
+                bert_output = bert_output.pooler_output
             else:
-                embedded_gst = self.gst(style_input)
+                bert_output = bert_output.pooler_output.detach()  # stop gradient flow
+            bert_output_matrix = bert_output.unsqueeze(1)
 
-        if hasattr(self, 'gst'):
-            embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
-            encoder_outputs = torch.cat((embedded_text, embedded_gst), dim=2)
+        # TP-GST
+        embedded_text_detached = embedded_text.detach()  # stop gradient flow
+        if hasattr(self, 'bert'):
+            tp_gst_input = torch.cat((embedded_text_detached, bert_output_matrix), dim=2)
+            tp_gst_linear_input = torch.cat((hidden_states, bert_output), dim=1)
+        else:
+            tp_gst_input = embedded_text_detached
+            tp_gst_linear_input = hidden_states
+
+        # inference gst
+        if tpgst_model == 'tpse':
+            embedded_gst = self.tpse(tp_gst_input).unsqeeze(1)
+        elif tpgst_model == 'tpse-linear':
+            embedded_gst = self.tpse(tp_gst_linear_input).unsqeeze(1)
+        elif tpgst_model == 'tpcw':
+            embedded_gst = self.tpcw(tp_gst_input).unsqeeze(1)
+        else:
+            raise KeyError('no such TP-GST model like {', tpgst_model, '}')
+
+        embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
+        encoder_outputs = torch.cat((embedded_text, embedded_gst), dim=2)
 
         mel_outputs, gate_outputs, alignments = self.decoder.inference(encoder_outputs)
 
@@ -614,18 +709,16 @@ class Tacotron2(nn.Module):
         embedded_inputs = self.embedding(text).transpose(1, 2)
         embedded_text = self.encoder.inference(embedded_inputs)
 
-        if hasattr(self, 'gst'):
-            if isinstance(style_input, int):
-                query = torch.zeros(1, 1, self.gst.encoder.ref_enc_gru_size).cuda()
-                GST = torch.tanh(self.gst.stl.embed)
-                key = GST[style_input].unsqueeze(0).expand(1, -1, -1)
-                embedded_gst = self.gst.stl.attention(query, key)
-            else:
-                embedded_gst = self.gst(style_input)
+        if isinstance(style_input, int):
+            query = torch.zeros(1, 1, self.gst.encoder.ref_enc_gru_size).cuda()
+            GST = torch.tanh(self.gst.stl.embed)
+            key = GST[style_input].unsqueeze(0).expand(1, -1, -1)
+            embedded_gst, _ = self.gst.stl.attention(query, key)
+        else:
+            embedded_gst, _ = self.gst(style_input)
 
-        if hasattr(self, 'gst'):
-            embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
-            encoder_outputs = torch.cat((embedded_text, embedded_gst), dim=2)
+        embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
+        encoder_outputs = torch.cat((embedded_text, embedded_gst), dim=2)
 
         mel_outputs, gate_outputs, alignments = self.decoder.inference_noattention(
             encoder_outputs, attention_map)

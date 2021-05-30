@@ -14,9 +14,10 @@ from yin import compute_yin
 
 class TextMelLoader(torch.utils.data.Dataset):
     """
-        1) loads audio, text and speaker ids
+        1) loads audio and text
         2) normalizes text and converts them to sequences of one-hot vectors
-        3) computes mel-spectrograms and f0s from audio files.
+        3) computes mel-spectrograms from audio files.
+        4) returns encoded text, mel, raw text
     """
     def __init__(self, audiopaths_and_text, hparams):
         self.audiopaths_and_text = load_filepaths_and_text(audiopaths_and_text)
@@ -61,9 +62,9 @@ class TextMelLoader(torch.utils.data.Dataset):
 
     def get_data(self, audiopath_and_text):
         audiopath, text = audiopath_and_text[0], audiopath_and_text[1]
-        text = self.get_text(text)  # int_tensor[char_index, ....]
+        enc_text = self.get_text(text)  # int_tensor[char_index, ....]
         mel = self.get_mel(audiopath)  # []
-        return (text, mel)
+        return (enc_text, mel, text)
 
     def __getitem__(self, index):
         return self.get_data(self.audiopaths_and_text[index])
@@ -103,20 +104,22 @@ class TextMelCollate():
             max_target_len += self.n_frames_per_step - max_target_len % self.n_frames_per_step
             assert max_target_len % self.n_frames_per_step == 0
 
-        # include mel padded, gate padded and speaker ids
+        # include mel padded, gate padded and raw text
         mel_padded = torch.FloatTensor(len(batch), num_mels, max_target_len)
         mel_padded.zero_()
         gate_padded = torch.FloatTensor(len(batch), max_target_len)
         gate_padded.zero_()
         output_lengths = torch.LongTensor(len(batch))
+        raw_text = []
 
         for i in range(len(ids_sorted_decreasing)):
             mel = batch[ids_sorted_decreasing[i]][1]
             mel_padded[i, :, :mel.size(1)] = mel
             gate_padded[i, mel.size(1)-1:] = 1
             output_lengths[i] = mel.size(1)
+            raw_text.append(batch[ids_sorted_decreasing[i]][2])
 
-        model_inputs = (text_padded, input_lengths, mel_padded, gate_padded,
-                        output_lengths)
+        model_inputs = (text_padded, input_lengths, mel_padded,
+                        gate_padded, output_lengths, raw_text)
 
         return model_inputs

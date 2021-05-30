@@ -24,14 +24,27 @@ class TPCWLoss(nn.Module):
     def __init__(self):
         super().__init__()
 
+    @staticmethod
+    def cross_entropy(w_combination, target):
+        return -(target * torch.log(w_combination)).sum(dim=1).mean()
+
     def forward(self, w_combination, target):
         """
         calculates cross-entropy loss over soft classes (GSTs distributions) and predicted weights
         :param w_combination: predicted combination weights tensor shape of (batch_size, token_num)
+                                                                         or (batch_size, atn_head_num, token_num)
         :param target: GSTs' combination weights tensor shape of (batch_size, token_num)
-        :return: cross-entropy value
+                                                              or (batch_size, atn_head_num, token_num)
+        :return: cross-entropy loss value or sum of cross-entropy loss values
         """
-        return -(target * torch.log(w_combination)).sum(dim=1).mean()
+        if w_combination.dim() == 2:
+            return self.cross_entropy(w_combination, target)
+        else:
+            losses = []
+            for atn_head_index in range(w_combination.size(1)):
+                loss = self.cross_entropy(w_combination[:, atn_head_index, :], target[:, atn_head_index, :])
+                losses.append(loss)
+            return sum(losses)
 
 
 class TPSELoss(nn.Module):
