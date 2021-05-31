@@ -188,30 +188,19 @@ class Encoder(nn.Module):
                             batch_first=True, bidirectional=True)
 
     def forward(self, x, input_lengths):
-        if x.size()[0] > 1:
-            x_embedded = []
-            for b_ind in range(x.size()[0]):
-                curr_x = x[b_ind:b_ind+1, :, :input_lengths[b_ind]].clone()
-                for conv in self.convolutions:
-                    curr_x = F.dropout(F.relu(conv(curr_x)), drop_rate, self.training)
-                x_embedded.append(curr_x[0].transpose(0, 1))
-            x = torch.nn.utils.rnn.pad_sequence(x_embedded, batch_first=True)
-        else:
-            for conv in self.convolutions:
-                x = F.dropout(F.relu(conv(x)), drop_rate, self.training)
-            x = x.transpose(1, 2)
+        for conv in self.convolutions:
+            x = F.dropout(F.relu(conv(x)), drop_rate, self.training)
+
+        x = x.transpose(1, 2)
 
         # pytorch tensor are not reversible, hence the conversion
         input_lengths = input_lengths.cpu().numpy()
-        x = nn.utils.rnn.pack_padded_sequence(
-            x, input_lengths, batch_first=True)
+        x = nn.utils.rnn.pack_padded_sequence(x, input_lengths, batch_first=True)
 
         self.lstm.flatten_parameters()
         outputs, (h_n, c_n) = self.lstm(x)
 
-        outputs, _ = nn.utils.rnn.pad_packed_sequence(
-            outputs, batch_first=True)
-
+        outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
         return outputs, h_n
 
     def inference(self, x):
@@ -543,15 +532,20 @@ class Tacotron2(nn.Module):
         self.tpse_linear = TPSELinear(hparams)
         # bert
         if hparams.tp_gst_use_bert:
+            print('BERT')
             self.bert_train = hparams.bert_train
             self.bert_encoder_dim = hparams.bert_encoder_dim
             if hparams.bert_pretrained:
                 self.bert_tokenizer = BertTokenizer.from_pretrained(hparams.bert_checkpoint_path, local_files_only=True)
                 self.bert = BertModel.from_pretrained(hparams.bert_checkpoint_path, local_files_only=True)
+                print('bert from checkpoint')
+                print('---------------------')
             else:
                 config = BertConfig(hparams.bert_config_path)
                 self.bert = BertModel(config)
                 self.bert_tokenizer = BertTokenizer(hparams.bert_vocab_path, do_lower_case=(not hparams.bert_cased))
+                print('bert created')
+                print('---------------------')
 
     def parse_batch(self, batch):
         text_padded, input_lengths, mel_padded, gate_padded, output_lengths, raw_text = batch
@@ -591,6 +585,7 @@ class Tacotron2(nn.Module):
         # Bert
         if hasattr(self, 'bert'):
             bert_tokens = self.bert_tokenizer(raw_text, return_tensors="pt", padding=True)
+            bert_tokens = bert_tokens.to("cuda:0")
             bert_output = self.bert(**bert_tokens)
             if self.bert_train:
                 bert_output = bert_output.pooler_output
@@ -614,7 +609,7 @@ class Tacotron2(nn.Module):
         # GST
         embedded_gst, scores_gst = self.gst(targets, output_lengths)
         tp_gst_output = [tpcw_output, tpse_output, tpse_linear_output,
-                         embedded_gst.detach().unsqeeze(1), scores_gst.detach()]    # stop backpropagation to GST
+                         embedded_gst.detach().squeeze(1), scores_gst.detach()]    # stop backpropagation to GST
 
         # New Encoder outputs
         embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
@@ -667,6 +662,7 @@ class Tacotron2(nn.Module):
         # Bert
         if hasattr(self, 'bert'):
             bert_tokens = self.bert_tokenizer(raw_text, return_tensors="pt", padding=True)
+            bert_tokens = bert_tokens.to("cuda:0")
             bert_output = self.bert(**bert_tokens)
             if self.bert_train:
                 bert_output = bert_output.pooler_output
@@ -685,11 +681,11 @@ class Tacotron2(nn.Module):
 
         # inference gst
         if tpgst_model == 'tpse':
-            embedded_gst = self.tpse(tp_gst_input).unsqeeze(1)
+            embedded_gst = self.tpse(tp_gst_input).unsqueeze(1)
         elif tpgst_model == 'tpse-linear':
-            embedded_gst = self.tpse(tp_gst_linear_input).unsqeeze(1)
+            embedded_gst = self.tpse(tp_gst_linear_input).unsqueeze(1)
         elif tpgst_model == 'tpcw':
-            embedded_gst = self.tpcw(tp_gst_input).unsqeeze(1)
+            embedded_gst = self.tpcw(tp_gst_input).unsqueeze(1)
         else:
             raise KeyError('no such TP-GST model like {', tpgst_model, '}')
 

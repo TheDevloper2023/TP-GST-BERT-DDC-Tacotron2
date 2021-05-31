@@ -85,10 +85,21 @@ def warm_start_model(checkpoint_path, model, ignore_layers):
     return model
 
 
-def load_checkpoint(checkpoint_path, model, optimizer):
+def load_checkpoint(checkpoint_path, model, optimizer, loading_bert=False):
     assert os.path.isfile(checkpoint_path)
     print("Loading checkpoint '{}'".format(checkpoint_path))
     checkpoint_dict = torch.load(checkpoint_path, map_location='cpu')
+
+    if not loading_bert:
+        bert_keys = list()
+        for key in checkpoint_dict['state_dict'].keys():
+            parent_net = key[: key.find('.')]
+            if parent_net == 'bert':
+                bert_keys.append(key)
+
+        for key in bert_keys:
+            del checkpoint_dict['state_dict'][key]
+
     model.load_state_dict(checkpoint_dict['state_dict'])
     optimizer.load_state_dict(checkpoint_dict['optimizer'])
     learning_rate = checkpoint_dict['learning_rate']
@@ -98,16 +109,29 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     return model, optimizer, learning_rate, iteration
 
 
-def save_checkpoint(model, optimizer, learning_rate, iteration, filepath):
+def save_checkpoint(model, optimizer, learning_rate, iteration, filepath, saving_bert=False):
     print("Saving model and optimizer state at iteration {} to {}".format(
         iteration, filepath))
+
+    model_state_dict = model.state_dict().copy()
+
+    if not saving_bert:
+        bert_keys = list()
+        for key in model.state_dict().keys():
+            parent_net = key[: key.find('.')]
+            if parent_net == 'bert':
+                bert_keys.append(key)
+
+        for key in bert_keys:
+            del model_state_dict[key]
+
     torch.save({'iteration': iteration,
-                'state_dict': model.state_dict(),
+                'state_dict': model_state_dict,
                 'optimizer': optimizer.state_dict(),
                 'learning_rate': learning_rate}, filepath)
 
 
-def validate(model, criterion, valset, iteration, batch_size, n_gpus,
+def validate(model, criterions, valset, iteration, batch_size, n_gpus,
              collate_fn, logger, distributed_run, rank):
     """Handles all the validation scoring and printing"""
     model.eval()
@@ -117,11 +141,23 @@ def validate(model, criterion, valset, iteration, batch_size, n_gpus,
                                 shuffle=False, batch_size=batch_size,
                                 pin_memory=False, collate_fn=collate_fn)
 
+        criterion, criterion_tpcw, criterion_tpse = criterions
         val_loss = 0.0
         for i, batch in enumerate(val_loader):
             x, y = model.parse_batch(batch)
             y_pred = model(x)
+
+            # TP-GST
+            tp_gst_output = y_pred.pop()
+            tpcw_output, tpse_output, tpse_linear_output, embedded_gst, scores_gst = tp_gst_output
+
+            loss_tpcw = criterion_tpcw(tpcw_output, scores_gst)
+            loss_tpse = criterion_tpse(tpse_output, embedded_gst)
+            loss_tpse_l = criterion_tpse(tpse_linear_output, embedded_gst)
+
             loss = criterion(y_pred, y)
+            loss = loss + loss_tpcw + loss_tpse + loss_tpse_l
+
             if distributed_run:
                 reduced_val_loss = reduce_tensor(loss.data, n_gpus).item()
             else:
@@ -185,7 +221,7 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
                 checkpoint_path, model, hparams.ignore_layers)
         else:
             model, optimizer, _learning_rate, iteration = load_checkpoint(
-                checkpoint_path, model, optimizer)
+                checkpoint_path, model, optimizer, hparams.bert_load_from_checkpoint)
             if hparams.use_saved_learning_rate:
                 learning_rate = _learning_rate
             iteration += 1  # next iteration is iteration + 1
@@ -250,14 +286,14 @@ def train(output_directory, log_directory, checkpoint_path, warm_start, n_gpus,
                     reduced_loss, grad_norm, learning_rate, duration, iteration)
 
             if not is_overflow and (iteration % hparams.iters_per_checkpoint == 0):
-                validate(model, criterion, valset, iteration,
+                validate(model, (criterion, criterion_tpcw, criterion_tpse), valset, iteration,
                         hparams.batch_size, n_gpus, collate_fn, logger,
                         hparams.distributed_run, rank)
                 if rank == 0:
                     checkpoint_path = os.path.join(
                         output_directory, "checkpoint_{}".format(iteration))
                     save_checkpoint(model, optimizer, learning_rate, iteration,
-                                    checkpoint_path)
+                                    checkpoint_path, hparams.bert_save_in_checkpoint)
 
             iteration += 1
 

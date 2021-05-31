@@ -9,7 +9,7 @@ def create_hparams(hparams_string=None, verbose=False):
         ################################
         # Experiment Parameters        #
         ################################
-        epochs=50000,
+        epochs=500,
         iters_per_checkpoint=500,
         seed=1234,
         dynamic_loss_scaling=True,
@@ -28,7 +28,7 @@ def create_hparams(hparams_string=None, verbose=False):
         validation_files='filelists/ljs_audiopaths_text_sid_val_filelist.txt',
         text_cleaners=['english_cleaners'],
         p_arpabet=1.0,
-        cmudict_path="data/cmu_dictionary",
+        cmudict_path=None,
 
         ################################
         # Audio Parameters             #
@@ -118,6 +118,7 @@ def create_hparams(hparams_string=None, verbose=False):
         bert_cased=True,
         bert_pretrained=True,
         bert_save_in_checkpoint=False,
+        bert_load_from_checkpoint=False,
         bert_train=False,
 
         ################################
