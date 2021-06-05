@@ -100,7 +100,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, loading_bert=False):
         for key in bert_keys:
             del checkpoint_dict['state_dict'][key]
 
-    model.load_state_dict(checkpoint_dict['state_dict'])
+    model.load_state_dict(checkpoint_dict['state_dict'], strict=False)
     optimizer.load_state_dict(checkpoint_dict['optimizer'])
     learning_rate = checkpoint_dict['learning_rate']
     iteration = checkpoint_dict['iteration']

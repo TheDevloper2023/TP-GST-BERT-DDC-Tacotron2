@@ -609,7 +609,7 @@ class Tacotron2(nn.Module):
         # GST
         embedded_gst, scores_gst = self.gst(targets, output_lengths)
         tp_gst_output = [tpcw_output, tpse_output, tpse_linear_output,
-                         embedded_gst.detach().squeeze(1), scores_gst.detach()]    # stop backpropagation to GST
+                         embedded_gst.detach().squeeze(1), scores_gst.detach()]  # stop backpropagation to GST
 
         # New Encoder outputs
         embedded_gst = embedded_gst.repeat(1, embedded_text.size(1), 1)
@@ -668,7 +668,7 @@ class Tacotron2(nn.Module):
                 bert_output = bert_output.pooler_output
             else:
                 bert_output = bert_output.pooler_output.detach()  # stop gradient flow
-            bert_output_matrix = bert_output.unsqueeze(1)
+            bert_output_matrix = bert_output.unsqueeze(1).expand(-1, embedded_text.size(1), -1)
 
         # TP-GST
         embedded_text_detached = embedded_text.detach()  # stop gradient flow
@@ -683,9 +683,11 @@ class Tacotron2(nn.Module):
         if tpgst_model == 'tpse':
             embedded_gst = self.tpse(tp_gst_input).unsqueeze(1)
         elif tpgst_model == 'tpse-linear':
-            embedded_gst = self.tpse(tp_gst_linear_input).unsqueeze(1)
+            embedded_gst = self.tpse_linear(tp_gst_linear_input).unsqueeze(1)
         elif tpgst_model == 'tpcw':
-            embedded_gst = self.tpcw(tp_gst_input).unsqueeze(1)
+            keys = torch.tanh(self.gst.stl.embed).unsqueeze(0)
+            scores = self.tpcw(tp_gst_input)
+            embedded_gst = self.gst.stl.attention.inference(keys, scores)
         else:
             raise KeyError('no such TP-GST model like {', tpgst_model, '}')
 
