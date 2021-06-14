@@ -179,7 +179,7 @@ class MultiHeadAttention(nn.Module):
 
         scores = scores.squeeze(2).transpose(0, 1)  # [N, h, T_k] [batch, 8, 10]
 
-        return out, scores
+        return out
 
 
 class GST(nn.Module):
