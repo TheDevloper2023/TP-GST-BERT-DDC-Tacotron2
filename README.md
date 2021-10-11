@@ -1,16 +1,21 @@
-![Mellotron](mellotron_logo.png "Mellotron")
+![TacoBERTron](images/TacoBERTron_icon.png)
 
-### Rafael Valle\*, Jason Li\*, Ryan Prenger and Bryan Catanzaro
-In our recent [paper] we propose Mellotron: a multispeaker voice synthesis model
-based on Tacotron 2 GST that can make a voice emote and sing without emotive or
-singing training data. 
+## TP-GST-BERT-Tacotron2 
+<img src="images/TP-GST-BERT T2.png" height=400>
 
-By explicitly conditioning on rhythm and continuous pitch
-contours from an audio signal or music score, Mellotron is able to generate
-speech in a variety of styles ranging from read speech to expressive speech,
-from slow drawls to rap and from monotonous voice to singing voice.
+This is a realization of the model proposed by [SberDevices team](https://m.habr.com/ru/company/sberdevices/blog/548812) and extended with quicker TP-GST module by me  
+### Model contains:
+* Tacotron2 Encoder + Decoder
+* Global Style Tokens module
+* 3 Text-predicting style embedding models
+* BERT model
 
-Visit our [website] for audio samples.
+<p align="left">
+    <img src="images/TPCW.png" height=300>
+    <img src="images/TPSE.png" height=300>
+    <img src="images/TPSELinear.png" height=300>
+    <img src="images/Legend.png" height=300>
+</p>
 
 ## Pre-requisites
 1. NVIDIA GPU + CUDA cuDNN
@@ -24,43 +29,36 @@ Visit our [website] for audio samples.
 6. Install python requirements or build docker image 
     - Install python requirements: `pip install -r requirements.txt`
 
+### Prepare BERT
+1. Move BERT checkpoint, config and vocabulary into [/bert](./bert) folder or setup related paths in [hparams.py](/hparams.py)
+2. Modify BERT hyper parameters in [hparams.py](/hparams.py) if those are needed
+
+
 ## Training
 1. Update the filelists inside the filelists folder to point to your data
 2. `python train.py --output_directory=outdir --log_directory=logdir`
 3. (OPTIONAL) `tensorboard --logdir=outdir/logdir`
 
-## Training using a pre-trained model
+### Training using a pre-trained model
 Training using a pre-trained model can lead to faster convergence  
 By default, the speaker embedding layer is [ignored]
 
 1. Download our published Mellotron model trained on [LibriTTS] or [LJS]
 2. `python train.py --output_directory=outdir --log_directory=logdir -c models/mellotron_libritts.pt --warm_start`
 
-## Multi-GPU (distributed) and Automatic Mixed Precision Training
+### Multi-GPU (distributed) and Automatic Mixed Precision Training
 1. `python -m multiproc train.py --output_directory=outdir --log_directory=logdir --hparams=distributed_run=True,fp16_run=True`
 
-## Inference demo
-1. `jupyter notebook --ip=127.0.0.1 --port=31337`
-2. Load inference.ipynb 
-3. (optional) Download our published [WaveGlow](https://drive.google.com/open?id=1okuUstGoBe_qZ4qUEF8CcwEugHP7GM_b) model
+## Training and Inference demo
+M-AILABS data preprocessing, train configuration and inference demos are represented in the [notebook demo.ipynb](./demo.ipynb)
 
 ## Related repos
 [WaveGlow](https://github.com/NVIDIA/WaveGlow) Faster than real time Flow-based
 Generative Network for Speech Synthesis.
 
 ## Acknowledgements
-This implementation uses code from the following repos: [Keith
-Ito](https://github.com/keithito/tacotron/), [Prem
-Seetharaman](https://github.com/pseeth/pytorch-stft), 
-[Chengqi Deng](https://github.com/KinglittleQ/GST-Tacotron),
-[Patrice Guyot](https://github.com/patriceguyot/Yin), as described in our code.
+* [Nvidia's Mellotron](https://github.com/NVIDIA/mellotron) (Tacotron2 + GST) is a basement of work
+* *Stanton, D., Wang, Y., & Skerry-Ryan, R. J. (2018, August 4)* **Predicting Expressive Speaking Style From Text In End-To-End Speech Synthesis** [https://arxiv.org/abs/1808.01410](https://arxiv.org/abs/1808.01410)
+* *Skerry-Ryan, RJ, Battenberg, Eric, Xiao, Ying, Wang, Yuxuan, Stanton, Daisy, Shor, Joel, Weiss, Ron J., Clark, Rob, and Saurous, Rif A.* **Towards end-to-end prosody transfer for 	expressive speech synthesis with Tacotron** [https://arxiv.org/abs/1803.09047](https://arxiv.org/abs/1803.09047)
+* *Sber Devices* **Synthesis of speech of virtual assistants Salute** [https://habr.com/ru/company/sberdevices/blog/548812/](https://habr.com/ru/company/sberdevices/blog/548812/)
 
-[ignored]: https://github.com/NVIDIA/mellotron/blob/master/hparams.py#L22
-[paper]: https://arxiv.org/abs/1910.11997
-[WaveGlow]: https://drive.google.com/open?id=1rpK8CzAAirq9sWZhe9nlfvxMF1dRgFbF
-[LibriTTS]: https://drive.google.com/open?id=1ZesPPyRRKloltRIuRnGZ2LIUEuMSVjkI
-[LJS]: https://drive.google.com/open?id=1UwDARlUl8JvB2xSuyMFHFsIWELVpgQD4
-[pytorch]: https://github.com/pytorch/pytorch#installation
-[website]: https://nv-adlr.github.io/Mellotron
-[Apex]: https://github.com/nvidia/apex
-[AMP]: https://github.com/NVIDIA/apex/tree/master/apex/amp
