@@ -1,4 +1,4 @@
-This Implementation adds Multispeaker and DDC alignment
+This is a fork of TP-GST-BERT-Tacotron2 that adds new stuff.
 
 ---
 ![TacoBERTron](images/TacoBERTron_icon.png)
