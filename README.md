@@ -1,3 +1,6 @@
+This Implementation adds Multispeaker and DDC alignment
+
+---
 ![TacoBERTron](images/TacoBERTron_icon.png)
 
 ## TP-GST-BERT-Tacotron2 
